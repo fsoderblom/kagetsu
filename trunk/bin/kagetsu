@@ -1,0 +1,293 @@
+#!/usr/bin/perl
+#
+# When       Who		What
+# 2009-10-07 f@xpd.se		created.
+
+# TODO:
+#
+#
+
+use strict;
+use warnings;
+#use diagnostics;
+
+use Net::Oping();
+use DBI;
+use Net::CIDR;
+use Getopt::Long;
+use Data::Dumper;
+
+my @objects;
+my @ipaddr;
+my @subnets;
+
+my $host;
+my $dbh;
+my $sql;
+my $ret;
+my $key;
+my $status;
+my $dropped;
+my $errmsg;
+my $ip;
+my $subnet;
+my %subnet;
+my %tested;
+my @row;
+my $net;
+my $ok = 0;
+my $failed = 0;
+my $down = 0;
+my $recovered = 0;
+my $max;
+my $candidates;
+
+my $debug = 0;
+my $verbose = 0;
+my $retry = 0;
+my $timeout = 5;
+my $interval = 99;
+my $range = 10;
+my $minimum = 2;
+
+my $usage = "Usage: " . $0 . " [-d|--debug] [-v|--verbose] [--timeout=<seconds>] [--in-parallell=<hosts>] --retry";
+
+my $OBJ_HEALTHY = 0;
+my $OBJ_DISABLED = 998;
+my $OBJ_DOWN = 999;
+
+my $NODE_FAIL = 101;
+my $NODE_DOWN = 102;
+my $NODE_DOWN_RECOVERED = 103; # Recovered from down state
+my $NODE_FAIL_RECOVERED = 105; # Recovered from failure
+
+my $FULL_RUN = 110; # Full run
+my $RETRY_RUN = 111; # Retry run
+
+#
+# Start of functions
+#
+
+#
+# Initiate DB connection
+sub connectDB()
+{
+	$dbh = DBI->connect('dbi:mysql:<db>','<user>','<pw>') or die "Connection Error: $DBI::errstr\n";
+}
+
+#
+# Get all objects
+sub getObjects()
+{
+	$sql = "SELECT ip FROM object WHERE ip != '0' AND ip != '' AND (status != $OBJ_DISABLED)";
+	$sql = "SELECT ip FROM object WHERE ip != '0' AND ip != '' AND (status != $OBJ_HEALTHY AND status != $OBJ_DISABLED AND status != $OBJ_DOWN)" if ($retry);
+	@objects = @{$dbh->selectcol_arrayref($sql)};
+}
+
+#
+# Extract all subnets from the subnet table
+sub getSubnets()
+{
+	$sql = "SELECT network FROM subnet";
+	@subnets = @{$dbh->selectcol_arrayref($sql)};
+}
+
+#
+# Find closest matching subnet
+sub findSubnet()
+{
+	foreach $ip (sort @objects) {
+		if (Net::CIDR::cidrlookup($ip, @subnets) == 1) {
+			foreach $subnet (sort @subnets) {
+				if (Net::CIDR::cidrlookup($ip, $subnet) == 1) {
+					$subnet{$ip} = $subnet;
+				}
+			}
+		}
+	}
+}
+
+#
+# Find if subnet is eligble for reachability test now
+sub matchSubnet()
+{
+	foreach $key (sort keys %subnet) {
+		print "$key => $subnet{$key}\n" if ($debug > 1);
+		$net = $subnet{$key};
+
+		if (!exists $tested{$net}) {
+			print "looking up $subnet{$key}\n" if $debug;
+			$sql = "SELECT network FROM subnet WHERE network = '$subnet{$key}' AND start <= NOW() AND end >= NOW()";
+			@row = $dbh->selectrow_array($sql);
+			# Mark network as tested positive or just already tested
+			$tested{$net} = 0;
+			$tested{$net}++ if ($row[0]);
+		}
+
+		# if test i spositive, e.g.: curtime > start and < end add to hash
+		if ($tested{$net}) {
+			print "adding $key\n" if ($debug > 2);
+			push @ipaddr, $key;
+		} else {
+			print "no match on $key\n" if $debug;
+		}
+	}
+	$candidates = scalar @ipaddr;
+}
+
+sub mainLoop()
+{
+	$ok = 0;
+	$failed = 0;
+	$down = 0;
+	$recovered = 0;
+
+	$max = scalar @ipaddr - 1;
+	print $max + 1 . " items in ipaddr array\n" if ($debug > 1);
+
+	# Create Oping object
+	my $obj = Net::Oping->new ();
+
+	for (my $lower = 0, my $roof = $interval; $lower <= $max; $lower += $interval, $roof += $interval)
+	{
+		my $upper = (($roof < $max) ? $roof : $max);
+		$status = $obj->host_add(@ipaddr[$lower..$upper]);
+		if ($status != ($upper - $lower + 1)) {
+			$errmsg = $obj->get_error();
+			print "ERROR: $errmsg\n";
+		}
+		print $status . " ip addresses added\n" if ($debug > 1);
+
+		$status = $obj->timeout($timeout);
+		$ret = $obj->ping();
+
+#		$dropped = $obj->get_dropped();
+#		print $errmsg;
+
+		foreach $host (@ipaddr[$lower..$upper]) {
+			$sql = "SELECT id,status,failed,successful,accesstime FROM object WHERE ip = ?";
+			my $sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+			$sth->execute($host) or die "Couldn't execute statement: " . $sth->errstr;
+			my ($objid, $objstatus, $objfailed, $objsucc, $objacc) = $sth->fetchrow_array();
+			if (!$ret->{ $host }) {
+				if ($objstatus == $OBJ_DOWN) {
+					$down++;
+					next;
+				}
+
+				$failed++;
+				print "$host didnt respond, queued for retry.\n" if $verbose;
+
+				# Update object and increment status
+				$objstatus = (++$objstatus > 6) ? $OBJ_DOWN : $objstatus;
+				$sql = "UPDATE object SET status = ?, failed = ?, statuschanged = NOW() WHERE id = ?";
+				$sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+				$sth->execute($objstatus, $objfailed + 1, $objid) or die "Couldn't execute statement: " . $sth->errstr;
+
+				# if status == 999, notify log
+				if ($objstatus == $OBJ_DOWN) {
+					$down++;
+					$failed--;
+					$sql = "INSERT INTO log (object,ip,network,datum,event,comment) VALUES(?, ?, ?, NOW(), ?, 'Node down.')";
+					$sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+					$sth->execute($objid, $host, $subnet{$host}, $NODE_DOWN) or die "Couldn't execute statement: " . $sth->errstr;
+				} else {
+					# Notify log on failure
+					$sql = "INSERT INTO log (object,ip,network,datum,event,comment) VALUES(?, ?, ?, NOW(), ?, 'Node failure (#$objstatus)')";
+					$sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+					$sth->execute($objid, $host, $subnet{$host}, $NODE_FAIL) or die "Couldn't execute statement: " . $sth->errstr;
+				}
+			} else {
+				$ok++;
+				print "Latency to `$host' is " . $ret->{ $host } . "\n" if ($debug);
+				# Handle recovery, e.g. from status 1+ or 999, notify log etc
+				if ($objstatus != 0) {
+					$recovered++;
+					$sql = "INSERT INTO log (object,ip,network,datum,event,comment) VALUES(?, ?, ?, NOW(), ?, 'Node recovered.')";
+					$sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+					$sth->execute($objid, $host, $subnet{$host}, (($objstatus == $OBJ_DOWN) ? $NODE_DOWN_RECOVERED : $NODE_FAIL_RECOVERED)) or die "Couldn't execute statement: " . $sth->errstr;
+					$objstatus = 0;
+				}
+				# Update object w. avg accesstime and fix status (if needed)
+				$sql = "UPDATE object SET accesstime = ?, status = ?, successful = ?, statuschanged = NOW() WHERE id = ?";
+				$sth = $dbh->prepare($sql) or die "Couldn't prepare statement: " . $dbh->errstr;
+				# Use same algorithm as RTT is calculated in BIND, use 80% of the old value, 20% of the new
+				$sth->execute((($objacc * 0.8) + ($ret->{ $host } * 0.2)), 0, $objsucc + 1, $objid) or die "Couldn't execute statement: " . $sth->errstr;
+
+			}
+		}
+		# Clean up before next round.
+		$status = $obj->host_remove(@ipaddr[$lower..$upper]);
+		if ($status != ($upper - $lower + 1)) {
+			$errmsg = $obj->get_error();
+			print "ERROR: $errmsg\n";
+		}
+		print $status . " ip addresses removed\n" if ($debug > 1);
+	}
+	# Do the log
+	&doLog;
+}
+
+sub cleanUp()
+{
+	$dbh->disconnect();
+}
+
+sub getOpt()
+{
+	my $ret = GetOptions("d+"=>\$debug, "debug+"=>\$debug, "v"=>\$verbose, "verbose"=>\$verbose,
+		 "--timeout=i"=>\$timeout, "--in-parallell=i"=>\$interval, "--retry"=>\$retry);
+	$verbose=1 if $debug;
+
+	if (!$ret) {
+		print $usage . "\n";
+		exit;
+	}
+}
+
+sub doLog()
+{
+	# Log statistics, amount of dropped, amount of recovered, amount of ok and total amount.
+	$sql = "INSERT INTO log (object, datum, event, comment) VALUES(0, NOW(), $FULL_RUN, '$ok (of " . ($max + 1) . ") healthy and reachable. ($down objects down, $failed objects in fail state, $recovered recovered)')";
+	$sql = "INSERT INTO log (object, datum, event, comment) VALUES(0, NOW(), $RETRY_RUN, '$down objects down, $failed objects in fail state, $recovered recovered.')" if ($retry);
+	$dbh->do($sql);
+}
+
+#
+# End of functions
+#
+
+# Get options
+&getOpt;
+
+# Connect to database
+&connectDB;
+
+# Extract IP from object table
+&getObjects;
+&getSubnets;
+
+# See if IP is a match in subnet table
+&findSubnet;
+&matchSubnet;
+
+# Do we have any candidates?
+if ($candidates) {
+	# Take care of any objects in retry bucket
+	if ($retry) {
+		my $i = 6;
+		while ($i--)
+		{
+			sleep(int(rand($range)) + $minimum);
+			&mainLoop;
+		}
+	} else {
+		# Do da ping
+		&mainLoop;
+		# call myself in retry mode
+		system ($0, "--retry");
+	}
+}
+
+&cleanUp;
+exit;
