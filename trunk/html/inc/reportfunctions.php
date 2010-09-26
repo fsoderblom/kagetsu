@@ -19,7 +19,7 @@ function testing($db, $ip, $fromdate, $days)
 	    }
 	}
 		
-	$sql = "select * from ".TBL_LOG." where ip='".$ip."' and event in(".EVT_NODE_FAILURE.",".EVT_NODE_DOWN.",".EVT_NODE_RECOVERED.") and datum>='".$start."' and datum<='".$stop."' order by id";
+	$sql = "select * from ".TBL_LOG." where ip='".$ip."' and event in(".EVT_NODE_FAILURE.",".EVT_NODE_DOWN.",".EVT_NODE_RECOVERED.",".EVT_NODE_RECOVERED_FROM_FAILURE.") and datum>='".$start."' and datum<='".$stop."' order by id";
 
 	if($rs = $db->execute($sql))
 	{
@@ -64,7 +64,7 @@ function testing($db, $ip, $fromdate, $days)
 	    			$status = 2;
     	    	}
     		}
-    		else if($event==EVT_NODE_RECOVERED)
+    		else if($event==EVT_NODE_RECOVERED || $event==EVT_NODE_RECOVERED_FROM_FAILURE)
     		{
     	    	if($status==0 || $status==2)
     	    	{

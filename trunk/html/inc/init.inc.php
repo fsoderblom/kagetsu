@@ -32,7 +32,7 @@ if(!defined("_init"))
 	include('inc/type.class.php');
 	include('inc/parents.class.php');
 
-	define("KAGETSU", "Kagetsu v1.0.1");
+	define("KAGETSU", "Kagetsu v1.0.2");
 
 	// Settings
 	define("DB_HOST", "localhost");					// Databasens adress / IP nr (Prod)
@@ -52,6 +52,7 @@ if(!defined("_init"))
 	define("EVT_NODE_FAILURE", 101);
 	define("EVT_NODE_DOWN", 102);
 	define("EVT_NODE_RECOVERED", 103);
+	define("EVT_NODE_RECOVERED_FROM_FAILURE", 105);
 	define("STATUS_DOWN", 999);
 	define("STATUS_DISABLED", 998);
 	define("STATUS_UP", 0);
