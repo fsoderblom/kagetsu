@@ -32,7 +32,7 @@ if(!defined("_init"))
 	include('inc/type.class.php');
 	include('inc/parents.class.php');
 
-	define("KAGETSU", "Kagetsu v1.0.2");
+	define("KAGETSU", "Kagetsu v1.0.3");
 
 	// Settings
 	define("DB_HOST", "localhost");					// Databasens adress / IP nr (Prod)
