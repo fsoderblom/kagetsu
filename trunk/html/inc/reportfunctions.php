@@ -19,7 +19,7 @@ function testing($db, $ip, $fromdate, $days)
 	    }
 	}
 		
-	$sql = "select * from ".TBL_LOG." where ip='".$ip."' and event in(".EVT_NODE_FAILURE.",".EVT_NODE_DOWN.",".EVT_NODE_RECOVERED.",".EVT_NODE_RECOVERED_FROM_FAILURE.") and datum>='".$start."' and datum<='".$stop."' order by id";
+	$sql = "select * from ".TBL_LOG." where ip='".$ip."' and event in(".EVT_NODE_DOWN.",".EVT_NODE_RECOVERED.") and datum>='".$start."' and datum<='".$stop."' order by id";
 
 	if($rs = $db->execute($sql))
 	{
@@ -52,30 +52,30 @@ function testing($db, $ip, $fromdate, $days)
 			$sla_start = $SLA[$network]["START"];
 			$sla_stop = $SLA[$network]["STOP"];
 						
-			if($event==EVT_NODE_FAILURE || $event==EVT_NODE_DOWN)
+			if($event==EVT_NODE_DOWN)
+			{
+				if($status==0 || $status==1)
+				{
+					if($status==0)
+					{
+						$isdown=false;
+					}
+				$arr[] = array("DATE"=>$date, "TIMESTAMP"=>$dt, "STATUS"=>"DOWN");
+				$status = 2;
+    	    			}
+    			}
+    		else if($event==EVT_NODE_RECOVERED)
     		{
-    	    	if($status==0 || $status==1)
-    	    	{
-    	    		if($status==0)
-    	    		{
-    	    			$isdown=false;
-    	    		}
-	    			$arr[] = array("DATE"=>$date, "TIMESTAMP"=>$dt, "STATUS"=>"DOWN");
-	    			$status = 2;
-    	    	}
-    		}
-    		else if($event==EVT_NODE_RECOVERED || $event==EVT_NODE_RECOVERED_FROM_FAILURE)
-    		{
-    	    	if($status==0 || $status==2)
-    	    	{
-    	    		if($status==0) // recovered found but never a down! Force down on first day.
-    	    		{
+			if($status==0 || $status==2)
+			{
+				if($status==0) // recovered found but never a down! Force down on first day.
+				{
 		    			$arr[] = array("DATE"=>$fromdate, "TIMESTAMP"=>"$fromdate $sla_start", "STATUS"=>"DOWN");
 						$isdown = false;
-    	    		}
+				}
 	    			$arr[] = array("DATE"=>$date, "TIMESTAMP"=>$dt, "STATUS"=>"UP");
 	    			$status=1;
-    	    	}
+			}
     		}
 
 //			$res = getUptimeDay($date_mem, $sla_start_mem, $sla_stop_mem, $ip, $arr);
