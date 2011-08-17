@@ -32,8 +32,8 @@ for($vrf_count=0; $vrf_count < count($vrfarray); $vrf_count++)
 	$vrfkey = $vrfarray[$vrf_count];
 	$vrfname = $vrfObj->getName($vrfarray[$vrf_count]);
 
-	$summary_sla = 0;
-    $summary_down = 0;
+	//$summary_sla = 0;
+	//$summary_down = 0;
 	$summmary_uptimes = array();
 	
 	$names = array();
@@ -79,13 +79,13 @@ for($vrf_count=0; $vrf_count < count($vrfarray); $vrf_count++)
 				$down = $v["DOWNTIME_SEC"];
 				$uptime = sprintf("%01.2f", ($sla-$down)/$sla*100);
 
-				$total_sla += $sla;
-				$total_down += $down;
-				$total_uptime = sprintf("%01.2f", ($total_sla-$total_down)/$total_sla*100);
+				//$total_sla += $sla;
+				//$total_down += $down;
+				//$total_uptime = sprintf("%01.2f", ($total_sla-$total_down)/$total_sla*100);
 
-				$summary_sla += $sla;
-				$summary_down += $down;
-				$summary_uptime = sprintf("%01.2f", ($summary_sla-$summary_down)/$summary_sla*100);
+				//$summary_sla += $sla;
+				//$summary_down += $down;
+				//$summary_uptime = sprintf("%01.2f", ($summary_sla-$summary_down)/$summary_sla*100);
 
 				$daysum[$i++] += doubleval($uptime);
 			}
@@ -93,24 +93,27 @@ for($vrf_count=0; $vrf_count < count($vrfarray); $vrf_count++)
 			$ipcount++; 
 		}
 
+        $uptimes = array(); // Blir X (vanligtvis 30) antal dagar med varje dags uptime
+
 		for($c=0; $c<$i; $c++)
 		{
 			$tmpdate = "$fromdate 00:00:00";
 			$tmpdate = date("Y-m-d", strtotime("$tmpdate +$c days"));
 			$ofuptime = sprintf("%01.1f", ($daysum[$c]/$ipcount));
 			$output .= "\r\n".$tmpdate.$sep.$vrfname.$sep.$ofuptime."%";
+			$uptimes[] = $ofuptime;
 		}		
 	}
 
-	$summary_uptimes[$vrfname] = $summary_uptime;
+	$summary_uptimes[$vrfname] = $uptimes;
 }
 
 $output_sum = "From".$sep."To".$sep."Vrf".$sep."% Uptime";
-foreach($summary_uptimes as $vrfname=>$uptime)
+foreach($summary_uptimes as $vrfname=>$arr)
 {
+    $uptime = sprintf("%01.2f", (array_sum($arr)/count($arr)));
 	$output_sum .= "\r\n".$fromdate.$sep.$tmpdate.$sep.$vrfname.$sep.$uptime."%";
 }
-
 $output = str_replace("#SUMMARY#", $output_sum, $output);
 
 $filename=rand().'.csv';
